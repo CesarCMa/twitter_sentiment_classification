@@ -164,3 +164,4 @@ cython_debug/
 # Others
 /logs
 /data/*
+pyproject.toml
