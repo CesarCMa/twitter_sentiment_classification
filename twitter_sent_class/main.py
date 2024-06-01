@@ -1,15 +1,35 @@
 # %%
+from dataclasses import dataclass
+
 import pandas as pd
 import spacy
 import spacy.lang
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn.multioutput import MultiOutputClassifier
+from sklearn.preprocessing import MultiLabelBinarizer
+from sklearn.metrics import classification_report
+
+RANDOM_STATE = 24
 
 
 # %%
+@dataclass
+class ExperimentParams:
+    max_tfidf_feats: int
+    test_split_proportion: float = 0.1
+
+
 def preprocess_dataset(dataset: pd.DataFrame, nlp_model) -> tuple:
-    dataset = (
-        dataset.set_index("ID").pipe(encode_sentiment_columns).rename(columns={"Tweet": "tweet"})
+    dataset = dataset.set_index("ID").rename(columns={"Tweet": "tweet"})
+    dataset["sentiments"] = dataset[[col for col in dataset.columns if col != "tweet"]].apply(
+        compress_columns, axis=1
     )
-    return dataset["tweet"].apply(preprocess_tweet_spacy, args=(nlp_model,)), dataset["sentiment"]
+    return (
+        dataset["tweet"].apply(preprocess_tweet_spacy, args=(nlp_model,)),
+        dataset["sentiments"],
+    )
 
 
 def preprocess_tweet_spacy(tweet, nlp_model):
@@ -19,24 +39,8 @@ def preprocess_tweet_spacy(tweet, nlp_model):
     return " ".join(tokens) + " " + " ".join(emojis)
 
 
-def encode_sentiment_columns(dataset: pd.DataFrame) -> pd.DataFrame:
-    sentiment_columns = [
-        "anger",
-        "anticipation",
-        "disgust",
-        "fear",
-        "joy",
-        "love",
-        "optimism",
-        "pessimism",
-        "sadness",
-        "surprise",
-        "trust",
-    ]
-    sentiment_mapping = {col: i for i, col in enumerate(sentiment_columns)}
-    return dataset.assign(sentiment=lambda x: x[sentiment_columns].idxmax(axis=1)).replace(
-        {"sentiment": sentiment_mapping}
-    )
+def compress_columns(row):
+    return set(row.index[row])
 
 
 # %%
@@ -44,9 +48,35 @@ def encode_sentiment_columns(dataset: pd.DataFrame) -> pd.DataFrame:
 nlp_model = spacy.load("es_dep_news_trf")
 nlp_model.add_pipe("emoji", first=True)
 dataset = pd.read_csv(
-    "/home/cesar/projects/twitter_sentiment_classification/data/sem_eval_train_es.csv"
+    "/home/cesar/projects/twitter_sentiment_classification/data/sem_eval_train_es.csv", nrows=500
 )
 
 # %%
 X, y = preprocess_dataset(dataset, nlp_model)
+
+# %%
+experiment_params = ExperimentParams(max_tfidf_feats=100)
+X_train, X_test, y_train, y_test = train_test_split(
+    X.to_numpy(),
+    y.to_numpy(),
+    test_size=experiment_params.test_split_proportion,
+    random_state=RANDOM_STATE,
+)
+# %%
+vectorizer = TfidfVectorizer(max_features=experiment_params.max_tfidf_feats)
+mlb = MultiLabelBinarizer()
+# %%
+X_train = vectorizer.fit_transform(X_train).toarray()
+X_test = vectorizer.transform(X_test).toarray()
+# %%
+y_train = mlb.fit_transform(y_train)
+y_test = mlb.transform(y_test)
+
+# %%
+
+classifier = MultiOutputClassifier(LogisticRegression(max_iter=1000))
+classifier.fit(X_train, y_train)
+# %%
+y_pred = classifier.predict(X_test)
+print(classification_report(y_test, y_pred, target_names=mlb.classes_))
 # %%
